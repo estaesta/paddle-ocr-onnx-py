@@ -8,7 +8,7 @@ This project ports the practical OCR pipeline used in the TypeScript ecosystem t
 - recognition using PP-OCRv5 recognition model
 - CTC greedy decoding
 
-No Bun/Node server is required.
+Designed for direct in-process OCR integration.
 
 ## Install
 
