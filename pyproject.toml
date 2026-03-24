@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ppu-paddle-ocr-py"
+version = "0.1.0"
+description = "Lightweight ONNX Paddle OCR engine for Python"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Project Contributors" }]
+license = { text = "MIT" }
+dependencies = [
+  "numpy>=1.24",
+  "pillow>=10.0",
+  "opencv-python>=4.10",
+  "onnxruntime>=1.20"
+]
+
+[project.urls]
+Homepage = "https://github.com/<your-org>/ppu-paddle-ocr-py"
+Repository = "https://github.com/<your-org>/ppu-paddle-ocr-py"
+
+[tool.setuptools]
+packages = ["paddle_py"]
