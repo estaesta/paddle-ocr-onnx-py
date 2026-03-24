@@ -1,4 +1,4 @@
-# ppu-paddle-ocr-py
+# paddle-ocr-onnx-py
 
 Lightweight, in-process Python OCR engine using ONNX Runtime.
 
@@ -21,7 +21,7 @@ pip install -e .
 ### From GitHub
 
 ```bash
-pip install "git+https://github.com/<your-org>/ppu-paddle-ocr-py.git@v0.1.0"
+pip install "git+https://github.com/estaesta/paddle-ocr-onnx-py.git@v0.1.0"
 ```
 
 ## Quick usage
