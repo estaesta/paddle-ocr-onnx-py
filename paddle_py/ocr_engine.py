@@ -79,7 +79,7 @@ class PaddleOnnxOCR:
         self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
         self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
         self.min_box_area = 25
-        self.padding_v = 0.3
+        self.padding_v = 0.4
         self.padding_h = 0.6
         self.rec_image_height = 48
         self.vertical_aspect_ratio = 1.5
