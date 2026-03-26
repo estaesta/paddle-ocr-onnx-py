@@ -36,6 +36,11 @@ from .recognition import crop_to_tensor, ctc_greedy_decode
 from .resources import ensure_local_resource, resolve_source
 from .types import Box, RecognitionItem
 
+try:
+    from .manga_preprocessing import preprocess_manga_pipeline
+except ImportError:
+    preprocess_manga_pipeline = None
+
 
 class PaddleOnnxOCR:
     def __init__(
@@ -50,6 +55,9 @@ class PaddleOnnxOCR:
         use_beam_search: bool = False,
         beam_width: int = 5,
         enable_vertical: bool = True,
+        manga_mode: bool = False,
+        manga_profile: str = "default",
+        multiscale_detection: bool = False,
     ) -> None:
         self.det_source = resolve_source(
             det_model_path,
@@ -71,6 +79,9 @@ class PaddleOnnxOCR:
         self.use_beam_search = use_beam_search
         self.beam_width = beam_width
         self.enable_vertical = enable_vertical
+        self.manga_mode = manga_mode
+        self.manga_profile = manga_profile
+        self.multiscale_detection = multiscale_detection
 
         self.det_session: Optional[ort.InferenceSession] = None
         self.rec_session: Optional[ort.InferenceSession] = None
@@ -83,6 +94,29 @@ class PaddleOnnxOCR:
         self.padding_h = 0.6
         self.rec_image_height = 48
         self.vertical_aspect_ratio = 1.5
+
+        # Detection parameters (tunable for manga)
+        self.det_db_thresh = 0.3
+        self.det_db_box_thresh = 0.5
+        self.det_db_unclip_ratio = 1.5
+        self.det_limit_side_len = 960
+        
+        # Manga-specific settings
+        if self.manga_mode:
+            self._apply_manga_settings()
+
+    def _apply_manga_settings(self) -> None:
+        """Apply optimized settings for manga text detection."""
+        # More aggressive detection for text on complex backgrounds
+        self.det_db_thresh = 0.2
+        self.det_db_box_thresh = 0.45
+        self.det_db_unclip_ratio = 2.0
+        self.det_limit_side_len = 1280
+        
+        # Better for furigana and small text
+        self.min_box_area = 16
+        self.padding_v = 0.3
+        self.padding_h = 0.5
 
     def initialize(self) -> None:
         if ort is None:
@@ -116,6 +150,11 @@ class PaddleOnnxOCR:
             raise RuntimeError("PaddleOnnxOCR is not initialized. Call initialize() first.")
 
         img = np.array(self._load_image(image))
+        
+        # Apply manga preprocessing if enabled
+        if self.manga_mode and preprocess_manga_pipeline is not None:
+            img = preprocess_manga_pipeline(img, profile=self.manga_profile)
+        
         base = self._recognize_image(img, flatten)
 
         if not self.enable_vertical:
@@ -160,7 +199,11 @@ class PaddleOnnxOCR:
         raise TypeError("image must be file path, bytes, or PIL.Image.Image")
 
     def _recognize_image(self, img: np.ndarray, flatten: bool) -> Dict[str, Any]:
-        boxes = self._detect(img)
+        if self.multiscale_detection:
+            boxes = self._detect_multiscale(img)
+        else:
+            boxes = self._detect(img)
+            
         if not boxes:
             key = "results" if flatten else "lines"
             return {"text": "", key: [], "confidence": 0.0}
@@ -207,6 +250,78 @@ class PaddleOnnxOCR:
         if return_prob_map:
             return boxes, prob_map, ratio
         return boxes
+
+    def _detect_multiscale(self, img: np.ndarray) -> List[Box]:
+        """
+        Detect text at multiple scales for better detection of varying text sizes.
+        Useful for manga with large dialogue + tiny furigana.
+        """
+        scales = [1.0, 1.5]  # Original + 1.5x upscale
+        all_boxes = []
+        
+        for scale in scales:
+            if scale != 1.0:
+                h, w = img.shape[:2]
+                scaled_img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
+            else:
+                scaled_img = img
+            
+            boxes = self._detect(scaled_img)
+            
+            # Scale boxes back to original coordinates
+            if scale != 1.0:
+                for box in boxes:
+                    box['x'] = int(box['x'] / scale)
+                    box['y'] = int(box['y'] / scale)
+                    box['width'] = int(box['width'] / scale)
+                    box['height'] = int(box['height'] / scale)
+            
+            all_boxes.extend(boxes)
+        
+        # Remove duplicate/overlapping boxes using Non-Maximum Suppression
+        return self._nms_boxes(all_boxes, iou_threshold=0.5)
+
+    def _nms_boxes(self, boxes: List[Box], iou_threshold: float = 0.5) -> List[Box]:
+        """Non-Maximum Suppression to remove duplicate detections."""
+        if not boxes:
+            return []
+        
+        # Sort by area (larger boxes first)
+        boxes = sorted(boxes, key=lambda b: b['width'] * b['height'], reverse=True)
+        
+        keep = []
+        while boxes:
+            current = boxes.pop(0)
+            keep.append(current)
+            
+            # Remove boxes that overlap significantly with current
+            boxes = [box for box in boxes if self._box_iou(current, box) < iou_threshold]
+        
+        return keep
+
+    def _box_iou(self, box1: Box, box2: Box) -> float:
+        """Calculate Intersection over Union for two boxes."""
+        x1_min, y1_min = box1['x'], box1['y']
+        x1_max, y1_max = x1_min + box1['width'], y1_min + box1['height']
+        
+        x2_min, y2_min = box2['x'], box2['y']
+        x2_max, y2_max = x2_min + box2['width'], y2_min + box2['height']
+        
+        # Calculate intersection
+        inter_x_min = max(x1_min, x2_min)
+        inter_y_min = max(y1_min, y2_min)
+        inter_x_max = min(x1_max, x2_max)
+        inter_y_max = min(y1_max, y2_max)
+        
+        if inter_x_max < inter_x_min or inter_y_max < inter_y_min:
+            return 0.0
+        
+        inter_area = (inter_x_max - inter_x_min) * (inter_y_max - inter_y_min)
+        box1_area = box1['width'] * box1['height']
+        box2_area = box2['width'] * box2['height']
+        union_area = box1_area + box2_area - inter_area
+        
+        return inter_area / union_area if union_area > 0 else 0.0
 
     def _recognize_crop(self, crop: np.ndarray, rec_input: str) -> tuple[str, float]:
         tensor, _ = crop_to_tensor(crop, self.rec_image_height)
